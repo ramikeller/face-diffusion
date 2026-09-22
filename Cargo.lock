@@ -240,7 +240,6 @@ checksum = "8f1fe948ff07f4bd06c30984e69f5b4899c516a3ef74f34df92a2df2ab535495"
 [[package]]
 name = "candle-core"
 version = "0.11.0"
-source = "git+https://github.com/huggingface/candle#e68b659fd096ed0947855d43b2eaa55634759c56"
 dependencies = [
  "byteorder",
  "candle-metal-kernels",
@@ -269,7 +268,6 @@ dependencies = [
 [[package]]
 name = "candle-metal-kernels"
 version = "0.11.0"
-source = "git+https://github.com/huggingface/candle#e68b659fd096ed0947855d43b2eaa55634759c56"
 dependencies = [
  "block2",
  "half",
@@ -284,7 +282,6 @@ dependencies = [
 [[package]]
 name = "candle-nn"
 version = "0.11.0"
-source = "git+https://github.com/huggingface/candle#e68b659fd096ed0947855d43b2eaa55634759c56"
 dependencies = [
  "candle-core",
  "candle-metal-kernels",

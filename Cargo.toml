@@ -5,8 +5,20 @@ edition = "2024"
 
 [dependencies]
 anyhow = "1.0.104"
-candle-core = { git = "https://github.com/huggingface/candle", features = ["metal"] }
-candle-nn = { git = "https://github.com/huggingface/candle", features = ["metal"] }
+candle-core = { git = "https://github.com/huggingface/candle", rev = "e68b659f", features = ["metal"] }
+candle-nn = { git = "https://github.com/huggingface/candle", rev = "e68b659f", features = ["metal"] }
 image = "0.25.10"
 rand = "0.10.3"
 rand_distr = "0.6.0"
+
+# candle-core's Metal conv2d backward pass feeds a non-contiguous tensor into
+# im2col/gemm when computing the weight gradient, producing a silently wrong
+# gradient (training diverges with no error). Not yet fixed on upstream main;
+# see https://github.com/huggingface/candle/pull/3839. We vendor upstream's
+# candle-core as of the commit above and apply just that one fix locally
+# (vendor/candle/candle-core/src/backprop.rs) rather than depend on an
+# unreviewed third-party fork.
+[patch."https://github.com/huggingface/candle"]
+candle-core = { path = "vendor/candle/candle-core" }
+candle-nn = { path = "vendor/candle/candle-nn" }
+candle-metal-kernels = { path = "vendor/candle/candle-metal-kernels" }
