@@ -1,4 +1,5 @@
 mod data;
+mod schedule;
 
 use candle_core::Device;
 use data::FaceDataset;
