@@ -1,0 +1,12 @@
+[package]
+name = "face-diffusion"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+anyhow = "1.0.104"
+candle-core = { git = "https://github.com/huggingface/candle", features = ["metal"] }
+candle-nn = { git = "https://github.com/huggingface/candle", features = ["metal"] }
+image = "0.25.10"
+rand = "0.10.3"
+rand_distr = "0.6.0"
