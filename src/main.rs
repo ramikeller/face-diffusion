@@ -52,6 +52,15 @@ fn main() -> anyhow::Result<()> {
             let param_count: usize = varmap.all_vars().iter().map(|v| v.elem_count()).sum();
             println!("UNet parameter count: {param_count}");
 
+            if Path::new(CHECKPOINT_PATH).exists() {
+                varmap.load(CHECKPOINT_PATH)?;
+                println!(
+                    "Resuming from checkpoint at {CHECKPOINT_PATH} \
+                     (note: AdamW's momentum/variance state is not saved, \
+                     so the optimizer restarts fresh even though weights don't)"
+                );
+            }
+
             let config = TrainConfig {
                 steps,
                 batch_size: 64,
