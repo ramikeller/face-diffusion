@@ -66,6 +66,7 @@ fn main() -> anyhow::Result<()> {
                 batch_size: 64,
                 lr: 2e-4,
                 log_every: 50,
+                save_every: 500,
                 checkpoint_path: CHECKPOINT_PATH.to_string(),
             };
             train::train(&unet, &schedule, &dataset, &varmap, &device, &config)?;

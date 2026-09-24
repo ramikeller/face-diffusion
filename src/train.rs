@@ -12,12 +12,16 @@ pub struct TrainConfig {
     pub batch_size: usize,
     pub lr: f64,
     pub log_every: usize,
+    pub save_every: usize,
     pub checkpoint_path: String,
 }
 
 /// Runs `config.steps` training steps. Each step: a random batch, a random
 /// timestep per sample, fresh noise, and one gradient update on how well the
-/// U-Net predicted that noise. Saves a checkpoint when done.
+/// U-Net predicted that noise. Saves a checkpoint periodically and when done,
+/// so `sample` can be run against progress without waiting for the full run
+/// to finish (loss alone is a poor signal for when visual structure
+/// emerges - it plateaus early, long before samples look face-like).
 pub fn train(
     unet: &UNet,
     schedule: &NoiseSchedule,
@@ -31,6 +35,10 @@ pub fn train(
         ..Default::default()
     };
     let mut optimizer = AdamW::new(varmap.all_vars(), params)?;
+
+    if let Some(parent) = std::path::Path::new(&config.checkpoint_path).parent() {
+        std::fs::create_dir_all(parent)?;
+    }
 
     let mut rng = rand::rng();
     let start = Instant::now();
@@ -60,13 +68,12 @@ pub fn train(
                 (step + 1) as f32 / elapsed.max(0.001)
             );
         }
-    }
 
-    if let Some(parent) = std::path::Path::new(&config.checkpoint_path).parent() {
-        std::fs::create_dir_all(parent)?;
+        if (step + 1) % config.save_every == 0 || step == config.steps - 1 {
+            varmap.save(&config.checkpoint_path)?;
+            println!("saved checkpoint to {} (step {})", config.checkpoint_path, step + 1);
+        }
     }
-    varmap.save(&config.checkpoint_path)?;
-    println!("saved checkpoint to {}", config.checkpoint_path);
 
     Ok(())
 }
