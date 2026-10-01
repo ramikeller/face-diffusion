@@ -5,11 +5,26 @@ edition = "2024"
 
 [dependencies]
 anyhow = "1.0.104"
-candle-core = { git = "https://github.com/huggingface/candle", rev = "e68b659f", features = ["metal"] }
-candle-nn = { git = "https://github.com/huggingface/candle", rev = "e68b659f", features = ["metal"] }
 image = "0.25.10"
 rand = "0.10.3"
 rand_distr = "0.6.0"
+
+# The "metal" feature pulls in Apple-only crates (objc2-metal etc.) that
+# don't compile outside macOS, so it's only enabled there. Elsewhere this
+# builds CPU-only by default; pass --features cuda on a machine with an
+# NVIDIA GPU and the CUDA toolkit installed to enable that backend instead.
+# main.rs's device selection (new_metal -> new_cuda -> Cpu) picks whichever
+# of these was actually compiled in at runtime.
+[target.'cfg(target_os = "macos")'.dependencies]
+candle-core = { git = "https://github.com/huggingface/candle", rev = "e68b659f", features = ["metal"] }
+candle-nn = { git = "https://github.com/huggingface/candle", rev = "e68b659f", features = ["metal"] }
+
+[target.'cfg(not(target_os = "macos"))'.dependencies]
+candle-core = { git = "https://github.com/huggingface/candle", rev = "e68b659f" }
+candle-nn = { git = "https://github.com/huggingface/candle", rev = "e68b659f" }
+
+[features]
+cuda = ["candle-core/cuda", "candle-nn/cuda"]
 
 # candle-core's Metal conv2d backward pass feeds a non-contiguous tensor into
 # im2col/gemm when computing the weight gradient, producing a silently wrong

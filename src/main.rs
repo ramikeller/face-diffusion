@@ -16,9 +16,30 @@ const IMAGE_SIZE: usize = 64;
 const TIMESTEPS: usize = 400;
 const CHECKPOINT_PATH: &str = "checkpoints/unet.safetensors";
 
+/// Tries Metal (Apple GPU), then CUDA (NVIDIA GPU), then falls back to CPU.
+/// `new_metal`/`new_cuda` compile on every platform but return an `Err` at
+/// runtime if that backend wasn't enabled via Cargo features (see
+/// Cargo.toml), so this works unmodified regardless of which platform or
+/// feature set the project was built with.
+fn select_device() -> Device {
+    if let Ok(device) = Device::new_metal(0) {
+        return device;
+    }
+    if let Ok(device) = Device::new_cuda(0) {
+        return device;
+    }
+    Device::Cpu
+}
+
 fn main() -> anyhow::Result<()> {
-    let device = Device::new_metal(0).unwrap_or(Device::Cpu);
+    let device = select_device();
     println!("Using device: {device:?}");
+    if matches!(device, Device::Cpu) {
+        println!(
+            "No GPU backend available (or not compiled in) - running on CPU, \
+             which will be noticeably slower than Metal/CUDA for this model."
+        );
+    }
 
     let schedule = NoiseSchedule::new(TIMESTEPS);
 

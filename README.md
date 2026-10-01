@@ -12,7 +12,7 @@ Still soft/painterly rather than sharp — that's the tiny model's ceiling, not 
 
 | Stage | File | What it does |
 |---|---|---|
-| 1 | [Cargo.toml](Cargo.toml) | [Candle](https://github.com/huggingface/candle) (pure-Rust ML framework, Metal GPU backend) |
+| 1 | [Cargo.toml](Cargo.toml) | [Candle](https://github.com/huggingface/candle) (pure-Rust ML framework); Metal on macOS, CPU elsewhere by default, optional CUDA |
 | 2 | [src/data.rs](src/data.rs) | Loads face images, center-crops + resizes to 64×64, normalizes to `[-1, 1]` |
 | 3 | [src/schedule.rs](src/schedule.rs) | Linear β noise schedule; `q_sample` (forward diffusion) and `p_sample` (one reverse step) |
 | 4 | [src/unet.rs](src/unet.rs) | 2-level U-Net noise predictor with sinusoidal timestep conditioning |
@@ -44,6 +44,14 @@ cargo build --release
 
 candle-core/candle-nn are pinned to a specific upstream commit and patched locally in `vendor/candle/` — see [Known issues](#known-issues-fixed-locally) for why.
 
+### Platform support
+
+- **macOS**: builds with the Metal GPU backend automatically.
+- **Linux/Windows with an NVIDIA GPU**: `cargo build --release --features cuda` (requires the CUDA toolkit installed).
+- **Everything else** (including AMD-GPU machines like an AMD mini PC, e.g. a GEM12+ — Candle has no ROCm/Vulkan backend): builds and runs CPU-only automatically, no flags needed. Expect it to be noticeably slower than GPU — see [Usage](#usage) for the rate we measured on CPU vs. Metal.
+
+`src/main.rs` tries Metal, then CUDA, then falls back to CPU at runtime, picking whichever backend was actually compiled in. Verified with `cargo check --target x86_64-unknown-linux-gnu` (type-checks cleanly CPU-only); not yet run end-to-end on real non-Mac hardware.
+
 ## Usage
 
 ```sh
@@ -56,7 +64,7 @@ cargo run --release -- sample <n>    # e.g. cargo run --release -- sample 16
 # writes samples/grid.png
 ```
 
-At ~0.4 steps/s on an M4 (batch size 64), expect roughly 1,400-1,500 training steps per hour.
+At ~0.4 steps/s on an M4's Metal GPU (batch size 64), expect roughly 1,400-1,500 training steps per hour. Plain CPU (no GPU backend compiled in or available) measured at ~0.28 steps/s on the same machine — slower, but still usable; exact CPU throughput on different hardware (e.g. an AMD mini PC) will vary.
 
 ## Results
 
@@ -75,7 +83,8 @@ Three real bugs in candle's Metal backend surfaced while building this, none yet
 1. **Build failure on Apple Silicon stable Rust**: an unstable NEON fp16 intrinsic in candle-core's CPU backend. Fixed upstream since (`vendor/candle` is pinned to a commit that already includes that fix).
 2. **Silently wrong gradients**: candle-core's Metal conv2d backward pass fed a non-contiguous tensor into im2col/gemm when computing the weight gradient, producing an incorrect gradient with no error — training would have silently diverged. Patched locally in `vendor/candle/candle-core/src/backprop.rs` (`.contiguous()` before the weight-gradient conv calls). See [huggingface/candle#3839](https://github.com/huggingface/candle/pull/3839) (unmerged at time of writing).
 3. **Unbounded Metal buffer-pool memory growth**: long sequences of GPU ops (e.g. the 400-step sampling loop) could grow wired memory without bound and eventually crash with `kIOGPUCommandBufferCallbackErrorOutOfMemory`. Also patched from the same upstream PR, in `vendor/candle/candle-core/src/metal_backend/` and `vendor/candle/candle-metal-kernels/src/metal/commands.rs`.
+4. **x86_64 build failure**: `candle-core`'s AMX-detection code called the inherently-unsafe `__cpuid_count` CPUID intrinsic outside an `unsafe` block, from a function that wasn't itself `unsafe` - a straightforward compile error, never hit on this project's own arm64 Mac since that code path is gated to `x86_64` builds only. Surfaced while cross-checking Linux/x86_64 portability. Patched locally in `vendor/candle/candle-core/src/quantized/repack_x86.rs`.
 
-A fourth bug was in this project's own code, not candle's: `src/sample.rs`'s reverse loop feeds each step's output into the next step's forward pass through the U-Net's trainable weights, which still builds an autodiff graph even though sampling never calls `.backward()`. Left attached, that graph - and every prior step's retained activations - grew across all 400 sequential steps until memory was exhausted. Fixed with `.detach()` each step.
+A fifth bug was in this project's own code, not candle's: `src/sample.rs`'s reverse loop feeds each step's output into the next step's forward pass through the U-Net's trainable weights, which still builds an autodiff graph even though sampling never calls `.backward()`. Left attached, that graph - and every prior step's retained activations - grew across all 400 sequential steps until memory was exhausted. Fixed with `.detach()` each step.
 
 `vendor/candle/` is a trimmed copy of just the crates this project depends on (candle-core, candle-nn, candle-metal-kernels), not the full upstream monorepo.
