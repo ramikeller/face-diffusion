@@ -586,6 +586,12 @@ pub(crate) fn amx_available() -> bool {
         // is_x86_feature_detected!("amx-int8") is unstable; read CPUID leaf 7 directly
         #[cfg(target_arch = "x86_64")]
         let has_amx = {
+            // __cpuid_count's safety classification differs across rustc
+            // versions (older ones require unsafe, newer ones made it safe
+            // since CPUID needs no target feature to execute on x86_64) -
+            // keep the block for the older toolchains and silence the
+            // now-redundant warning on newer ones rather than version-gate.
+            #[allow(unused_unsafe)]
             let info = unsafe { core::arch::x86_64::__cpuid_count(7, 0) };
             info.edx & (1 << 25) != 0 && info.edx & (1 << 24) != 0
         };
