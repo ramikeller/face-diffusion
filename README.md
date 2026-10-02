@@ -50,7 +50,9 @@ candle-core/candle-nn are pinned to a specific upstream commit and patched local
 - **Linux/Windows with an NVIDIA GPU**: `cargo build --release --features cuda` (requires the CUDA toolkit installed).
 - **Everything else** (including AMD-GPU machines like an AMD mini PC, e.g. a GEM12+ — Candle has no ROCm/Vulkan backend): builds and runs CPU-only automatically, no flags needed. Expect it to be noticeably slower than GPU — see [Usage](#usage) for the rate we measured on CPU vs. Metal.
 
-`src/main.rs` tries Metal, then CUDA, then falls back to CPU at runtime, picking whichever backend was actually compiled in. Verified with `cargo check --target x86_64-unknown-linux-gnu` (type-checks cleanly CPU-only); not yet run end-to-end on real non-Mac hardware.
+`src/main.rs` tries Metal, then CUDA, then falls back to CPU at runtime, picking whichever backend was actually compiled in. Verified end-to-end on real non-Mac hardware (an AMD mini PC, CPU-only path) in addition to `cargo check --target x86_64-unknown-linux-gnu`; the `cuda` feature itself is untested (no NVIDIA hardware available while building this).
+
+CPU throughput is noticeably more sensitive to memory bandwidth than to core count or clock speed for this workload - on hardware with constrained memory bandwidth (e.g. single-channel RAM), reducing `batch_size` in `main.rs` and/or capping threads with `RAYON_NUM_THREADS=<n>` can measurably help by shrinking the per-step working set and reducing contention, sometimes more than adding cores does.
 
 ## Usage
 
@@ -78,13 +80,14 @@ Further training keeps helping but with diminishing returns; the tiny architectu
 
 ## Known issues (fixed locally)
 
-Three real bugs in candle's Metal backend surfaced while building this, none yet fixed upstream at the commit this project pins to:
+Real bugs in candle surfaced while building and porting this, none yet fixed upstream at the commit this project pins to:
 
 1. **Build failure on Apple Silicon stable Rust**: an unstable NEON fp16 intrinsic in candle-core's CPU backend. Fixed upstream since (`vendor/candle` is pinned to a commit that already includes that fix).
 2. **Silently wrong gradients**: candle-core's Metal conv2d backward pass fed a non-contiguous tensor into im2col/gemm when computing the weight gradient, producing an incorrect gradient with no error — training would have silently diverged. Patched locally in `vendor/candle/candle-core/src/backprop.rs` (`.contiguous()` before the weight-gradient conv calls). See [huggingface/candle#3839](https://github.com/huggingface/candle/pull/3839) (unmerged at time of writing).
 3. **Unbounded Metal buffer-pool memory growth**: long sequences of GPU ops (e.g. the 400-step sampling loop) could grow wired memory without bound and eventually crash with `kIOGPUCommandBufferCallbackErrorOutOfMemory`. Also patched from the same upstream PR, in `vendor/candle/candle-core/src/metal_backend/` and `vendor/candle/candle-metal-kernels/src/metal/commands.rs`.
-4. **x86_64 build failure**: `candle-core`'s AMX-detection code called the inherently-unsafe `__cpuid_count` CPUID intrinsic outside an `unsafe` block, from a function that wasn't itself `unsafe` - a straightforward compile error, never hit on this project's own arm64 Mac since that code path is gated to `x86_64` builds only. Surfaced while cross-checking Linux/x86_64 portability. Patched locally in `vendor/candle/candle-core/src/quantized/repack_x86.rs`.
+4. **x86_64 build failure, version-dependent**: `candle-core`'s AMX-detection code calls `core::arch::x86_64::__cpuid_count` from a safe function. Its safety classification differs across rustc versions — older toolchains require an `unsafe` block around it or fail to compile (`E0133`); a newer toolchain used while porting to other hardware had reclassified it as safe, making that same block an "unnecessary unsafe" warning instead. Never hit on this project's own arm64 Mac, since that code path is gated to `x86_64` builds only. Patched locally in `vendor/candle/candle-core/src/quantized/repack_x86.rs` with `#[allow(unused_unsafe)]`, which keeps it correct (and warning-free) on both.
+5. **Deprecated-constant warning from a module/type name collision**: two files (`candle-core/src/cpu/erf.rs`, `candle-nn/src/attention/cpu_flash/standard.rs`) had an unnecessary `use std::f64;`/`use std::f32;` import that shadowed the primitive type name, causing `f64::INFINITY` written elsewhere in those files to silently resolve to the deprecated module-level constant instead of the modern primitive associated constant. Fixed by deleting the unused imports.
 
-A fifth bug was in this project's own code, not candle's: `src/sample.rs`'s reverse loop feeds each step's output into the next step's forward pass through the U-Net's trainable weights, which still builds an autodiff graph even though sampling never calls `.backward()`. Left attached, that graph - and every prior step's retained activations - grew across all 400 sequential steps until memory was exhausted. Fixed with `.detach()` each step.
+A sixth bug was in this project's own code, not candle's: `src/sample.rs`'s reverse loop feeds each step's output into the next step's forward pass through the U-Net's trainable weights, which still builds an autodiff graph even though sampling never calls `.backward()`. Left attached, that graph - and every prior step's retained activations - grew across all 400 sequential steps until memory was exhausted. Fixed with `.detach()` each step.
 
-`vendor/candle/` is a trimmed copy of just the crates this project depends on (candle-core, candle-nn, candle-metal-kernels), not the full upstream monorepo.
+`vendor/candle/` is a trimmed copy of just the crates this project depends on (candle-core, candle-nn, candle-metal-kernels, candle-kernels — the last only used by the optional `cuda` feature), not the full upstream monorepo.
