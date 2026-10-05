@@ -294,13 +294,30 @@ impl Tensor {
                         let out_size =
                             (grad_h - 1) * stride + dilation * (k_h - 1) + 1 - 2 * padding;
                         let out_padding = arg.dim(2)? - out_size;
-                        let grad_arg = grad.conv_transpose2d(
-                            kernel,
-                            *padding,
-                            out_padding,
-                            *stride,
-                            *dilation,
-                        )?;
+                        let k_w = kernel.dim(3)?;
+                        let grad_arg = if *stride == 1
+                            && *dilation == 1
+                            && k_h == k_w
+                            && *padding < k_h
+                        {
+                            // With stride 1, conv_transpose2d(grad, k, p) is
+                            // exactly conv2d(grad, k', k - 1 - p) where k' is
+                            // k spatially flipped with in/out channels
+                            // swapped. Taking that route uses the
+                            // im2col + gemm conv path, which on Metal is
+                            // several times faster than the naive
+                            // one-thread-per-output conv_transpose2d kernel.
+                            let flipped = kernel.flip(&[2, 3])?.transpose(0, 1)?.contiguous()?;
+                            grad.conv2d(&flipped, k_h - 1 - *padding, 1, 1, 1)?
+                        } else {
+                            grad.conv_transpose2d(
+                                kernel,
+                                *padding,
+                                out_padding,
+                                *stride,
+                                *dilation,
+                            )?
+                        };
                         let sum_grad = grads.or_insert(arg)?;
                         *sum_grad = sum_grad.add(&grad_arg)?;
 

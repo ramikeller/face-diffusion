@@ -25,31 +25,33 @@ METAL_FUNC void im2col(
   if (tid >= dst_numel) {
     return;
   }
-  const size_t b_in = src_dims[0];
-  const size_t c_in = src_dims[1];
-  const size_t h_in = src_dims[2];
-  const size_t w_in = src_dims[3];
+  // Index decomposition is done in 32-bit: `tid` is a 32-bit uint, so
+  // every quotient below fits, and Apple GPUs have no native 64-bit integer
+  // divide (it's emulated, and was the dominant cost of every conv2d).
+  const uint c_in = src_dims[1];
+  const uint h_in = src_dims[2];
+  const uint w_in = src_dims[3];
 
-  const size_t dst_s4 = w_k;
-  const size_t dst_s3 = h_k * dst_s4;
-  const size_t dst_s2 = c_in * dst_s3;
-  const size_t dst_s1 = w_out * dst_s2;
-  const size_t dst_s0 = h_out * dst_s1;
+  const uint dst_s4 = w_k;
+  const uint dst_s3 = h_k * dst_s4;
+  const uint dst_s2 = c_in * dst_s3;
+  const uint dst_s1 = w_out * dst_s2;
+  const uint dst_s0 = h_out * dst_s1;
 
-  size_t tmp_tid = tid;
-  const size_t b_idx = tmp_tid / dst_s0;
+  uint tmp_tid = tid;
+  const uint b_idx = tmp_tid / dst_s0;
   tmp_tid -= b_idx * dst_s0;
-  const size_t h_idx = tmp_tid / dst_s1;
+  const uint h_idx = tmp_tid / dst_s1;
   tmp_tid -= h_idx * dst_s1;
-  const size_t w_idx = tmp_tid / dst_s2;
+  const uint w_idx = tmp_tid / dst_s2;
   tmp_tid -= w_idx * dst_s2;
-  const size_t c_idx = tmp_tid / dst_s3;
+  const uint c_idx = tmp_tid / dst_s3;
   tmp_tid -= c_idx * dst_s3;
-  const size_t h_k_idx = tmp_tid / dst_s4;
+  const uint h_k_idx = tmp_tid / dst_s4;
   tmp_tid -= h_k_idx * dst_s4;
-  const size_t w_k_idx = tmp_tid;
-  size_t src_h_idx = h_idx * stride + h_k_idx * dilation;
-  size_t src_w_idx = w_idx * stride + w_k_idx * dilation;
+  const uint w_k_idx = tmp_tid;
+  uint src_h_idx = h_idx * (uint)stride + h_k_idx * (uint)dilation;
+  uint src_w_idx = w_idx * (uint)stride + w_k_idx * (uint)dilation;
   if (src_h_idx < padding || src_h_idx >= h_in + padding) {
     dst[tid] = static_cast<T>(0);
   }
@@ -594,10 +596,11 @@ METAL_FUNC void conv_transpose2d(
     return;
   }
 
-  const size_t b_idx = tid / (w_out * h_out * c_out);
-  const size_t dst_c_idx = (tid / (w_out * h_out)) % c_out;
-  const size_t out_y = (tid / w_out) % h_out;
-  const size_t out_x = tid % w_out;
+  // 32-bit index decomposition; see im2col for why.
+  const uint b_idx = tid / (uint)(w_out * h_out * c_out);
+  const uint dst_c_idx = (tid / (uint)(w_out * h_out)) % (uint)c_out;
+  const uint out_y = (tid / (uint)w_out) % (uint)h_out;
+  const uint out_x = tid % (uint)w_out;
 
   const size_t src_idx0 = b_idx * input_stride[0];
 
