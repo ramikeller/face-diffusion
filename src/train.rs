@@ -1,4 +1,5 @@
 use crate::data::FaceDataset;
+use crate::ema::Ema;
 use crate::schedule::NoiseSchedule;
 use crate::unet::UNet;
 use anyhow::Result;
@@ -14,6 +15,7 @@ pub struct TrainConfig {
     pub log_every: usize,
     pub save_every: usize,
     pub checkpoint_path: String,
+    pub ema_checkpoint_path: String,
 }
 
 /// Runs `config.steps` training steps. Each step: a random batch, a random
@@ -27,6 +29,8 @@ pub fn train(
     schedule: &NoiseSchedule,
     dataset: &FaceDataset,
     varmap: &VarMap,
+    ema: &Ema,
+    ema_varmap: &VarMap,
     device: &Device,
     config: &TrainConfig,
 ) -> Result<()> {
@@ -57,6 +61,7 @@ pub fn train(
         let loss = candle_nn::loss::mse(&predicted_noise, &noise)?;
 
         optimizer.backward_step(&loss)?;
+        ema.update()?;
 
         if step % config.log_every == 0 || step == config.steps - 1 {
             let loss_val = loss.to_scalar::<f32>()?;
@@ -71,7 +76,13 @@ pub fn train(
 
         if (step + 1) % config.save_every == 0 || step == config.steps - 1 {
             varmap.save(&config.checkpoint_path)?;
-            println!("saved checkpoint to {} (step {})", config.checkpoint_path, step + 1);
+            ema_varmap.save(&config.ema_checkpoint_path)?;
+            println!(
+                "saved checkpoints to {} and {} (step {})",
+                config.checkpoint_path,
+                config.ema_checkpoint_path,
+                step + 1
+            );
         }
     }
 

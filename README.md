@@ -61,10 +61,14 @@ CPU throughput is noticeably more sensitive to memory bandwidth than to core cou
 # Saves a checkpoint every 500 steps (configurable in main.rs) and at the end.
 cargo run --release -- <steps>       # e.g. cargo run --release -- 5000
 
-# Generate a grid of images from the current checkpoint.
-cargo run --release -- sample <n>    # e.g. cargo run --release -- sample 16
+# Generate a grid of images from the EMA checkpoint (falls back to the raw
+# training weights if no EMA checkpoint exists yet).
+cargo run --release -- sample <n>        # e.g. cargo run --release -- sample 16
+cargo run --release -- sample <n> raw    # raw training weights, for comparison
 # writes samples/grid.png
 ```
+
+Training also keeps an exponential moving average (EMA, decay 0.999) of the weights in [src/ema.rs](src/ema.rs), saved alongside the main checkpoint as `checkpoints/unet_ema.safetensors`. Sampling from the EMA rather than the raw weights removes much of the speckle/blotch noise caused by step-to-step weight jitter. When resuming a checkpoint that predates EMA, the average is initialized from the current weights; give it a few thousand steps before judging samples.
 
 At ~0.4 steps/s on an M4's Metal GPU (batch size 64), expect roughly 1,400-1,500 training steps per hour. Plain CPU (no GPU backend compiled in or available) measured at ~0.28 steps/s on the same machine — slower, but still usable; exact CPU throughput on different hardware (e.g. an AMD mini PC) will vary.
 
