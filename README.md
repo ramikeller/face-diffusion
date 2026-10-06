@@ -57,16 +57,20 @@ CPU throughput is noticeably more sensitive to memory bandwidth than to core cou
 ## Usage
 
 ```sh
-# Train. Resumes automatically from checkpoints/unet.safetensors if it exists.
-# Saves a checkpoint every 500 steps (configurable in main.rs) and at the end.
+# Train for <steps> more steps (default 5000). Resumes automatically from
+# checkpoints/unet.safetensors if it exists; the step counter in the log
+# restarts at 1 and AdamW's optimizer state starts fresh, only the weights
+# carry over. Saves both checkpoints every 500 steps (configurable in
+# main.rs) and at the end, so a run can be stopped with Ctrl-C at any time,
+# losing at most the steps since the last save.
 cargo run --release -- <steps>       # e.g. cargo run --release -- 5000
 
-# Generate a grid of images from the EMA checkpoint (falls back to the raw
-# training weights if no EMA checkpoint exists yet).
+# Generate a grid of <n> images (default 16) from the EMA checkpoint (falls
+# back to the raw training weights if no EMA checkpoint exists yet).
 cargo run --release -- sample <n>        # e.g. cargo run --release -- sample 16
 cargo run --release -- sample <n> raw    # raw training weights, for comparison
-# writes samples/grid_<date>_<time>.png (grid_raw_... for raw weights), so
-# repeated sampling never overwrites an earlier grid. E.g. to watch a long
+# writes samples/grid_<date>_<time>.png (grid_raw_... when `raw` is passed),
+# so repeated sampling never overwrites an earlier grid. E.g. to watch a long
 # training run from a second terminal, sampling once an hour:
 while true; do cargo run --release -- --large sample 16; sleep 3600; done
 
@@ -93,7 +97,7 @@ cargo run --release -- --large --batch 32 <steps>
 
 Each size has its own checkpoint files, since their weights aren't interchangeable; the small model's variable names are unchanged, so checkpoints from before the large option existed still load. The large model has to be trained from scratch.
 
-Training also keeps an exponential moving average (EMA, decay 0.999) of the weights in [src/ema.rs](src/ema.rs), saved alongside the main checkpoint as `checkpoints/unet_ema.safetensors`. Sampling from the EMA rather than the raw weights removes much of the speckle/blotch noise caused by step-to-step weight jitter. When resuming a checkpoint that predates EMA, the average is initialized from the current weights; give it a few thousand steps before judging samples.
+Training also keeps an exponential moving average (EMA, decay 0.999) of the weights in [src/ema.rs](src/ema.rs), saved alongside the main checkpoint as `checkpoints/unet_ema.safetensors` (`unet_large_ema.safetensors` for `--large`). Sampling from the EMA rather than the raw weights removes much of the speckle/blotch noise caused by step-to-step weight jitter. When resuming a checkpoint that predates EMA, the average is initialized from the current weights; give it a few thousand steps before judging samples.
 
 Same checkpoint and same starting noise (candle's Metal RNG uses a fixed default seed), raw weights on the left, EMA weights on the right — the EMA removes most of the grainy high-frequency texture:
 
@@ -101,7 +105,17 @@ Same checkpoint and same starting noise (candle's Metal RNG uses a fixed default
 |---|---|
 | ![Raw-weight samples](docs/example_output_raw.png) | ![EMA-weight samples](docs/example_output.png) |
 
-At ~1.1 steps/s on an M4's Metal GPU (batch size 64), expect roughly 4,000 training steps per hour (up from ~0.4 steps/s before the Metal kernel fixes in [Known issues](#known-issues-fixed-locally) items 6-7). Plain CPU (no GPU backend compiled in or available) measured at ~0.28 steps/s on the same machine, before those fixes — slower, but still usable; exact CPU throughput on different hardware (e.g. an AMD mini PC) will vary.
+At ~1.1 steps/s on an M4's Metal GPU (batch size 64), expect roughly 4,000 training steps per hour (up from ~0.4 steps/s before the Metal kernel fixes in [Known issues](#known-issues-fixed-locally) items 6-7). Plain CPU (no GPU backend compiled in or available) measured at ~0.28 steps/s on the same machine, before those fixes — slower, but still usable.
+
+On an AMD mini PC (GEM12, CPU-only, 6 threads, in an LXC container with 16 GB RAM), the large model measured:
+
+| `--batch` | Seconds/step | Images/s | Peak RAM |
+|---|---|---|---|
+| 16 | 8.5 | 1.89 | 3.9 GB |
+| 32 | 20.8 | 1.54 | 7.4 GB |
+| 64 | 46.0 | 1.39 | 14.2 GB |
+
+Smaller batches were faster *per image* here, and 4 threads were within 3% of 6 (8.7 s/step at batch 16) - both consistent with this workload being memory-bandwidth bound on CPU. Batch 64 was OOM-killed with 8 GB of RAM. Even at its best, that machine is ~12x slower than the M4's Metal GPU (~23 images/s for the large model).
 
 ## Results
 
