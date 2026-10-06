@@ -49,8 +49,19 @@ fn main() -> anyhow::Result<()> {
     // `--large` anywhere on the command line selects the bigger model, which
     // has its own checkpoint and sample files so both sizes can coexist
     // (their checkpoints are not interchangeable).
-    let all_args: Vec<String> = std::env::args().skip(1).collect();
+    let mut all_args: Vec<String> = std::env::args().skip(1).collect();
     let large = all_args.iter().any(|a| a == "--large");
+
+    // `--batch <n>` overrides the training batch size, e.g. to fit the large
+    // model into a memory-constrained machine. Ignored when sampling.
+    let mut batch_size = 64;
+    if let Some(i) = all_args.iter().position(|a| a == "--batch") {
+        batch_size = match all_args.get(i + 1).and_then(|s| s.parse::<usize>().ok()) {
+            Some(n) if n > 0 => n,
+            _ => anyhow::bail!("--batch needs a positive integer, e.g. --batch 32"),
+        };
+        all_args.drain(i..i + 2);
+    }
     let (config, checkpoint_path, ema_checkpoint_path, sample_path) = if large {
         (
             UNetConfig::large(),
@@ -115,6 +126,7 @@ fn main() -> anyhow::Result<()> {
 
             let param_count: usize = varmap.all_vars().iter().map(|v| v.elem_count()).sum();
             println!("UNet parameter count: {param_count}");
+            println!("Batch size: {batch_size}");
 
             if Path::new(checkpoint_path).exists() {
                 varmap.load(checkpoint_path)?;
@@ -139,7 +151,7 @@ fn main() -> anyhow::Result<()> {
 
             let config = TrainConfig {
                 steps,
-                batch_size: 64,
+                batch_size,
                 lr: 2e-4,
                 log_every: 50,
                 save_every: 500,

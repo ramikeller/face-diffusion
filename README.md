@@ -52,7 +52,7 @@ candle-core/candle-nn are pinned to a specific upstream commit and patched local
 
 `src/main.rs` tries Metal, then CUDA, then falls back to CPU at runtime, picking whichever backend was actually compiled in. Verified end-to-end on real non-Mac hardware (an AMD mini PC, CPU-only path) in addition to `cargo check --target x86_64-unknown-linux-gnu`; the `cuda` feature itself is untested (no NVIDIA hardware available while building this).
 
-CPU throughput is noticeably more sensitive to memory bandwidth than to core count or clock speed for this workload - on hardware with constrained memory bandwidth (e.g. single-channel RAM), reducing `batch_size` in `main.rs` and/or capping threads with `RAYON_NUM_THREADS=<n>` can measurably help by shrinking the per-step working set and reducing contention, sometimes more than adding cores does.
+CPU throughput is noticeably more sensitive to memory bandwidth than to core count or clock speed for this workload - on hardware with constrained memory bandwidth (e.g. single-channel RAM), reducing the batch size with `--batch <n>` and/or capping threads with `RAYON_NUM_THREADS=<n>` can measurably help by shrinking the per-step working set and reducing contention, sometimes more than adding cores does.
 
 ## Usage
 
@@ -71,6 +71,10 @@ cargo run --release -- sample <n> raw    # raw training weights, for comparison
 cargo run --release -- --large <steps>
 cargo run --release -- --large sample <n>
 # checkpoints/unet_large{,_ema}.safetensors, samples/grid_large.png
+
+# Override the training batch size (default 64), e.g. to fit the large model
+# into a machine with less RAM.
+cargo run --release -- --large --batch 32 <steps>
 ```
 
 ### Model sizes
