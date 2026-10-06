@@ -65,12 +65,15 @@ cargo run --release -- <steps>       # e.g. cargo run --release -- 5000
 # training weights if no EMA checkpoint exists yet).
 cargo run --release -- sample <n>        # e.g. cargo run --release -- sample 16
 cargo run --release -- sample <n> raw    # raw training weights, for comparison
-# writes samples/grid.png
+# writes samples/grid_<date>_<time>.png (grid_raw_... for raw weights), so
+# repeated sampling never overwrites an earlier grid. E.g. to watch a long
+# training run from a second terminal, sampling once an hour:
+while true; do cargo run --release -- --large sample 16; sleep 3600; done
 
 # Add --large to any command to use the larger model instead (see below).
 cargo run --release -- --large <steps>
 cargo run --release -- --large sample <n>
-# checkpoints/unet_large{,_ema}.safetensors, samples/grid_large.png
+# checkpoints/unet_large{,_ema}.safetensors, samples/grid_large_<date>_<time>.png
 
 # Override the training batch size (default 64), e.g. to fit the large model
 # into a machine with less RAM.

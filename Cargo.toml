@@ -5,6 +5,7 @@ edition = "2024"
 
 [dependencies]
 anyhow = "1.0.104"
+chrono = { version = "0.4.45", default-features = false, features = ["clock"] }
 image = "0.25.10"
 rand = "0.10.3"
 rand_distr = "0.6.0"

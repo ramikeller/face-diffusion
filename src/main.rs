@@ -62,19 +62,19 @@ fn main() -> anyhow::Result<()> {
         };
         all_args.drain(i..i + 2);
     }
-    let (config, checkpoint_path, ema_checkpoint_path, sample_path) = if large {
+    let (config, checkpoint_path, ema_checkpoint_path, sample_prefix) = if large {
         (
             UNetConfig::large(),
             "checkpoints/unet_large.safetensors",
             "checkpoints/unet_large_ema.safetensors",
-            "samples/grid_large.png",
+            "samples/grid_large",
         )
     } else {
         (
             UNetConfig::small(),
             "checkpoints/unet.safetensors",
             "checkpoints/unet_ema.safetensors",
-            "samples/grid.png",
+            "samples/grid",
         )
     };
     println!("Model: {}", if large { "large" } else { "small" });
@@ -114,7 +114,12 @@ fn main() -> anyhow::Result<()> {
 
             let images = sample::sample(model, &schedule, batch, IMAGE_SIZE, &device)?;
 
-            let out_path = Path::new(sample_path);
+            // Timestamped so repeated sampling during a long training run
+            // keeps every grid instead of overwriting the previous one.
+            let timestamp = chrono::Local::now().format("%Y-%m-%d_%H-%M-%S");
+            let suffix = if raw { "_raw" } else { "" };
+            let out_path = format!("{sample_prefix}{suffix}_{timestamp}.png");
+            let out_path = Path::new(&out_path);
             sample::save_grid(&images, out_path, 4)?;
             println!("Saved {batch} samples to {}", out_path.display());
         }
