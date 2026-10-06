@@ -2,11 +2,11 @@
 
 A from-scratch DDPM (denoising diffusion probabilistic model) in Rust, trained on celebrity faces. No pretrained weights, no diffusion library — the network learns to reverse a fixed noising process, then sampling starts from pure random noise and iteratively denoises it into a novel 64×64 face.
 
-Deliberately small (64×64 images, a 2-level U-Net, ~1.1M parameters) so it trains fast enough on a single GPU to actually iterate on, rather than aiming for production-quality output. Example output after 23,300 training steps (~14 hours on an M4):
+Deliberately small (64×64 images, a 2-level U-Net, ~1.1M parameters) so it trains fast enough on a single GPU to actually iterate on, rather than aiming for production-quality output. Example output, sampled from the EMA weights after 23,300+ training steps plus a further run with EMA enabled:
 
 ![Example output grid](docs/example_output.png)
 
-Still soft/painterly rather than sharp — that's the tiny model's ceiling, not a bug. See [Results](#results) below.
+Several samples are clearly recognizable faces with realistic skin tones, but many are still warped or double-exposed — that's the tiny model's capacity ceiling, not a bug. See [Results](#results) below.
 
 ## Pipeline
 
@@ -69,6 +69,12 @@ cargo run --release -- sample <n> raw    # raw training weights, for comparison
 ```
 
 Training also keeps an exponential moving average (EMA, decay 0.999) of the weights in [src/ema.rs](src/ema.rs), saved alongside the main checkpoint as `checkpoints/unet_ema.safetensors`. Sampling from the EMA rather than the raw weights removes much of the speckle/blotch noise caused by step-to-step weight jitter. When resuming a checkpoint that predates EMA, the average is initialized from the current weights; give it a few thousand steps before judging samples.
+
+Same checkpoint and same starting noise (candle's Metal RNG uses a fixed default seed), raw weights on the left, EMA weights on the right — the EMA removes most of the grainy high-frequency texture:
+
+| Raw weights | EMA weights |
+|---|---|
+| ![Raw-weight samples](docs/example_output_raw.png) | ![EMA-weight samples](docs/example_output.png) |
 
 At ~1.1 steps/s on an M4's Metal GPU (batch size 64), expect roughly 4,000 training steps per hour (up from ~0.4 steps/s before the Metal kernel fixes in [Known issues](#known-issues-fixed-locally) items 6-7). Plain CPU (no GPU backend compiled in or available) measured at ~0.28 steps/s on the same machine, before those fixes — slower, but still usable; exact CPU throughput on different hardware (e.g. an AMD mini PC) will vary.
 
