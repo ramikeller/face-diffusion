@@ -1,6 +1,7 @@
 use candle_core::{Device, Result, Tensor};
 use candle_nn::{
-    conv2d, group_norm, linear, Conv2d, Conv2dConfig, GroupNorm, Linear, Module, VarBuilder,
+    conv2d, group_norm, linear, ops::softmax, Conv2d, Conv2dConfig, GroupNorm, Linear, Module,
+    VarBuilder,
 };
 
 const NUM_GROUPS: usize = 8;
@@ -139,33 +140,109 @@ impl Upsample {
     }
 }
 
-/// A small 2-level U-Net: 64x64 -> 32x32 -> 16x16 and back, with skip
+/// Single-head self-attention over all spatial positions, with a residual
+/// connection. Convs alone only see a local neighborhood per layer; this
+/// lets every position at the bottleneck look at every other one, so e.g.
+/// the two eyes can be made consistent with each other.
+struct AttnBlock {
+    norm: GroupNorm,
+    qkv: Conv2d,
+    proj: Conv2d,
+}
+
+impl AttnBlock {
+    fn new(ch: usize, vb: VarBuilder) -> Result<Self> {
+        Ok(Self {
+            norm: group_norm(NUM_GROUPS, ch, 1e-5, vb.pp("norm"))?,
+            qkv: conv2d(ch, ch * 3, 1, Conv2dConfig::default(), vb.pp("qkv"))?,
+            proj: conv2d(ch, ch, 1, Conv2dConfig::default(), vb.pp("proj"))?,
+        })
+    }
+
+    fn forward(&self, x: &Tensor) -> Result<Tensor> {
+        let (b, c, h, w) = x.dims4()?;
+        let qkv = self.qkv.forward(&self.norm.forward(x)?)?.reshape((b, 3 * c, h * w))?;
+        // (b, c, n) -> (b, n, c) for q and v; k stays (b, c, n).
+        let q = qkv.narrow(1, 0, c)?.transpose(1, 2)?.contiguous()?;
+        let k = qkv.narrow(1, c, c)?.contiguous()?;
+        let v = qkv.narrow(1, 2 * c, c)?.transpose(1, 2)?.contiguous()?;
+
+        let scores = (q.matmul(&k)? / (c as f64).sqrt())?;
+        let attn = softmax(&scores, candle_core::D::Minus1)?;
+        let out = attn.matmul(&v)?.transpose(1, 2)?.reshape((b, c, h, w))?;
+        x + self.proj.forward(&out)?
+    }
+}
+
+/// Model size. `small()` reproduces the original architecture exactly
+/// (same variable names), so existing checkpoints keep loading.
+pub struct UNetConfig {
+    /// Channel count at full resolution; doubles at each level down.
+    pub base_channels: usize,
+    /// Two ResBlocks per encoder/decoder level instead of one.
+    pub extra_blocks: bool,
+    /// Self-attention at the 16x16 bottleneck.
+    pub attention: bool,
+}
+
+impl UNetConfig {
+    pub fn small() -> Self {
+        Self {
+            base_channels: 32,
+            extra_blocks: false,
+            attention: false,
+        }
+    }
+
+    pub fn large() -> Self {
+        Self {
+            base_channels: 64,
+            extra_blocks: true,
+            attention: true,
+        }
+    }
+}
+
+/// A 2-level U-Net: 64x64 -> 32x32 -> 16x16 and back, with skip
 /// connections carrying fine detail across the bottleneck.
 pub struct UNet {
     time_dim: usize,
     time_mlp: TimeMlp,
     init_conv: Conv2d,
     enc1: ResBlock,
+    enc1b: Option<ResBlock>,
     down1: Downsample,
     enc2: ResBlock,
+    enc2b: Option<ResBlock>,
     down2: Downsample,
     bott1: ResBlock,
+    attn: Option<AttnBlock>,
     bott2: ResBlock,
     dec2_up: Upsample,
     dec2: ResBlock,
+    dec2b: Option<ResBlock>,
     dec1_up: Upsample,
     dec1: ResBlock,
+    dec1b: Option<ResBlock>,
     out_norm: GroupNorm,
     out_conv: Conv2d,
 }
 
 impl UNet {
-    pub fn new(vb: VarBuilder) -> Result<Self> {
-        let base = 32;
+    pub fn new(config: &UNetConfig, vb: VarBuilder) -> Result<Self> {
+        let base = config.base_channels;
         let time_dim = base * 4;
         let pad1 = Conv2dConfig {
             padding: 1,
             ..Default::default()
+        };
+
+        let extra = |in_ch: usize, out_ch: usize, name: &str| -> Result<Option<ResBlock>> {
+            if config.extra_blocks {
+                Ok(Some(ResBlock::new(in_ch, out_ch, time_dim, vb.pp(name))?))
+            } else {
+                Ok(None)
+            }
         };
 
         Ok(Self {
@@ -174,19 +251,28 @@ impl UNet {
             init_conv: conv2d(3, base, 3, pad1, vb.pp("init_conv"))?,
 
             enc1: ResBlock::new(base, base, time_dim, vb.pp("enc1"))?,
+            enc1b: extra(base, base, "enc1b")?,
             down1: Downsample::new(base, base * 2, vb.pp("down1"))?,
 
             enc2: ResBlock::new(base * 2, base * 2, time_dim, vb.pp("enc2"))?,
+            enc2b: extra(base * 2, base * 2, "enc2b")?,
             down2: Downsample::new(base * 2, base * 4, vb.pp("down2"))?,
 
             bott1: ResBlock::new(base * 4, base * 4, time_dim, vb.pp("bott1"))?,
+            attn: if config.attention {
+                Some(AttnBlock::new(base * 4, vb.pp("attn"))?)
+            } else {
+                None
+            },
             bott2: ResBlock::new(base * 4, base * 4, time_dim, vb.pp("bott2"))?,
 
             dec2_up: Upsample::new(base * 4, base * 2, vb.pp("dec2_up"))?,
             dec2: ResBlock::new(base * 4, base * 2, time_dim, vb.pp("dec2"))?,
+            dec2b: extra(base * 2, base * 2, "dec2b")?,
 
             dec1_up: Upsample::new(base * 2, base, vb.pp("dec1_up"))?,
             dec1: ResBlock::new(base * 2, base, time_dim, vb.pp("dec1"))?,
+            dec1b: extra(base, base, "dec1b")?,
 
             out_norm: group_norm(NUM_GROUPS, base, 1e-5, vb.pp("out_norm"))?,
             out_conv: conv2d(base, 3, 3, pad1, vb.pp("out_conv"))?,
@@ -199,23 +285,32 @@ impl UNet {
         let emb = sinusoidal_embedding(t, self.time_dim, x.device())?;
         let emb = self.time_mlp.forward(&emb)?;
 
+        // Applies an optional extra ResBlock, or passes x through.
+        let maybe = |block: &Option<ResBlock>, x: Tensor| match block {
+            Some(block) => block.forward(&x, &emb),
+            None => Ok(x),
+        };
+
         let x = self.init_conv.forward(x)?;
-        let skip1 = self.enc1.forward(&x, &emb)?;
+        let skip1 = maybe(&self.enc1b, self.enc1.forward(&x, &emb)?)?;
         let x = self.down1.forward(&skip1)?;
 
-        let skip2 = self.enc2.forward(&x, &emb)?;
+        let skip2 = maybe(&self.enc2b, self.enc2.forward(&x, &emb)?)?;
         let x = self.down2.forward(&skip2)?;
 
-        let x = self.bott1.forward(&x, &emb)?;
+        let mut x = self.bott1.forward(&x, &emb)?;
+        if let Some(attn) = &self.attn {
+            x = attn.forward(&x)?;
+        }
         let x = self.bott2.forward(&x, &emb)?;
 
         let x = self.dec2_up.forward(&x)?;
         let x = Tensor::cat(&[&x, &skip2], 1)?;
-        let x = self.dec2.forward(&x, &emb)?;
+        let x = maybe(&self.dec2b, self.dec2.forward(&x, &emb)?)?;
 
         let x = self.dec1_up.forward(&x)?;
         let x = Tensor::cat(&[&x, &skip1], 1)?;
-        let x = self.dec1.forward(&x, &emb)?;
+        let x = maybe(&self.dec1b, self.dec1.forward(&x, &emb)?)?;
 
         self.out_conv.forward(&self.out_norm.forward(&x)?.silu()?)
     }
@@ -229,14 +324,16 @@ mod tests {
     #[test]
     fn forward_preserves_input_shape() {
         let device = Device::Cpu;
-        let varmap = VarMap::new();
-        let vb = VarBuilder::from_varmap(&varmap, candle_core::DType::F32, &device);
-        let unet = UNet::new(vb).unwrap();
+        for config in [UNetConfig::small(), UNetConfig::large()] {
+            let varmap = VarMap::new();
+            let vb = VarBuilder::from_varmap(&varmap, candle_core::DType::F32, &device);
+            let unet = UNet::new(&config, vb).unwrap();
 
-        let x = Tensor::randn(0f32, 1f32, (2, 3, 64, 64), &device).unwrap();
-        let t = [0usize, 200];
+            let x = Tensor::randn(0f32, 1f32, (2, 3, 64, 64), &device).unwrap();
+            let t = [0usize, 200];
 
-        let out = unet.forward(&x, &t).unwrap();
-        assert_eq!(out.dims(), &[2, 3, 64, 64]);
+            let out = unet.forward(&x, &t).unwrap();
+            assert_eq!(out.dims(), &[2, 3, 64, 64]);
+        }
     }
 }

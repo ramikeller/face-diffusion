@@ -12,12 +12,10 @@ use ema::Ema;
 use schedule::NoiseSchedule;
 use std::path::Path;
 use train::TrainConfig;
-use unet::UNet;
+use unet::{UNet, UNetConfig};
 
 const IMAGE_SIZE: usize = 64;
 const TIMESTEPS: usize = 400;
-const CHECKPOINT_PATH: &str = "checkpoints/unet.safetensors";
-const EMA_CHECKPOINT_PATH: &str = "checkpoints/unet_ema.safetensors";
 /// Per-step EMA decay. Effective averaging window is ~1/(1-decay) = 1000
 /// steps (half-life ~700): long enough to smooth out minibatch jitter,
 /// short enough that the EMA tracks progress within a few-thousand-step run.
@@ -48,19 +46,41 @@ fn main() -> anyhow::Result<()> {
         );
     }
 
+    // `--large` anywhere on the command line selects the bigger model, which
+    // has its own checkpoint and sample files so both sizes can coexist
+    // (their checkpoints are not interchangeable).
+    let all_args: Vec<String> = std::env::args().skip(1).collect();
+    let large = all_args.iter().any(|a| a == "--large");
+    let (config, checkpoint_path, ema_checkpoint_path, sample_path) = if large {
+        (
+            UNetConfig::large(),
+            "checkpoints/unet_large.safetensors",
+            "checkpoints/unet_large_ema.safetensors",
+            "samples/grid_large.png",
+        )
+    } else {
+        (
+            UNetConfig::small(),
+            "checkpoints/unet.safetensors",
+            "checkpoints/unet_ema.safetensors",
+            "samples/grid.png",
+        )
+    };
+    println!("Model: {}", if large { "large" } else { "small" });
+
     let schedule = NoiseSchedule::new(TIMESTEPS);
 
     let mut varmap = VarMap::new();
     let vb = VarBuilder::from_varmap(&varmap, DType::F32, &device);
-    let unet = UNet::new(vb)?;
+    let unet = UNet::new(&config, vb)?;
 
     // A second, identically-shaped U-Net holding the EMA of the weights
     // above. Never trained directly; `Ema::update` blends it toward `unet`.
     let mut ema_varmap = VarMap::new();
     let ema_vb = VarBuilder::from_varmap(&ema_varmap, DType::F32, &device);
-    let ema_unet = UNet::new(ema_vb)?;
+    let ema_unet = UNet::new(&config, ema_vb)?;
 
-    let mut args = std::env::args().skip(1);
+    let mut args = all_args.into_iter().filter(|a| a != "--large");
     match args.next().as_deref() {
         Some("sample") => {
             let batch = args
@@ -71,19 +91,19 @@ fn main() -> anyhow::Result<()> {
 
             // Prefer the EMA weights; `sample <n> raw` uses the live
             // training weights instead, for comparison.
-            let model = if !raw && Path::new(EMA_CHECKPOINT_PATH).exists() {
-                ema_varmap.load(EMA_CHECKPOINT_PATH)?;
-                println!("Loaded EMA checkpoint from {EMA_CHECKPOINT_PATH}");
+            let model = if !raw && Path::new(ema_checkpoint_path).exists() {
+                ema_varmap.load(ema_checkpoint_path)?;
+                println!("Loaded EMA checkpoint from {ema_checkpoint_path}");
                 &ema_unet
             } else {
-                varmap.load(CHECKPOINT_PATH)?;
-                println!("Loaded checkpoint from {CHECKPOINT_PATH}");
+                varmap.load(checkpoint_path)?;
+                println!("Loaded checkpoint from {checkpoint_path}");
                 &unet
             };
 
             let images = sample::sample(model, &schedule, batch, IMAGE_SIZE, &device)?;
 
-            let out_path = Path::new("samples/grid.png");
+            let out_path = Path::new(sample_path);
             sample::save_grid(&images, out_path, 4)?;
             println!("Saved {batch} samples to {}", out_path.display());
         }
@@ -96,19 +116,19 @@ fn main() -> anyhow::Result<()> {
             let param_count: usize = varmap.all_vars().iter().map(|v| v.elem_count()).sum();
             println!("UNet parameter count: {param_count}");
 
-            if Path::new(CHECKPOINT_PATH).exists() {
-                varmap.load(CHECKPOINT_PATH)?;
+            if Path::new(checkpoint_path).exists() {
+                varmap.load(checkpoint_path)?;
                 println!(
-                    "Resuming from checkpoint at {CHECKPOINT_PATH} \
+                    "Resuming from checkpoint at {checkpoint_path} \
                      (note: AdamW's momentum/variance state is not saved, \
                      so the optimizer restarts fresh even though weights don't)"
                 );
             }
 
             let ema = Ema::new(&varmap, &ema_varmap, EMA_DECAY)?;
-            if Path::new(EMA_CHECKPOINT_PATH).exists() {
-                ema_varmap.load(EMA_CHECKPOINT_PATH)?;
-                println!("Resuming EMA from {EMA_CHECKPOINT_PATH}");
+            if Path::new(ema_checkpoint_path).exists() {
+                ema_varmap.load(ema_checkpoint_path)?;
+                println!("Resuming EMA from {ema_checkpoint_path}");
             } else {
                 // Start the average from the current weights (a resumed
                 // checkpoint, or random init) rather than from the shadow
@@ -123,8 +143,8 @@ fn main() -> anyhow::Result<()> {
                 lr: 2e-4,
                 log_every: 50,
                 save_every: 500,
-                checkpoint_path: CHECKPOINT_PATH.to_string(),
-                ema_checkpoint_path: EMA_CHECKPOINT_PATH.to_string(),
+                checkpoint_path: checkpoint_path.to_string(),
+                ema_checkpoint_path: ema_checkpoint_path.to_string(),
             };
             train::train(
                 &unet,

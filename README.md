@@ -15,7 +15,7 @@ Several samples are clearly recognizable faces with realistic skin tones, but ma
 | 1 | [Cargo.toml](Cargo.toml) | [Candle](https://github.com/huggingface/candle) (pure-Rust ML framework); Metal on macOS, CPU elsewhere by default, optional CUDA |
 | 2 | [src/data.rs](src/data.rs) | Loads face images, center-crops + resizes to 64×64, normalizes to `[-1, 1]` |
 | 3 | [src/schedule.rs](src/schedule.rs) | Linear β noise schedule; `q_sample` (forward diffusion) and `p_sample` (one reverse step) |
-| 4 | [src/unet.rs](src/unet.rs) | 2-level U-Net noise predictor with sinusoidal timestep conditioning |
+| 4 | [src/unet.rs](src/unet.rs) | 2-level U-Net noise predictor with sinusoidal timestep conditioning; small and large configurations |
 | 5 | [src/train.rs](src/train.rs) | Training loop: predict the noise added to a randomly-noised image, MSE loss, AdamW |
 | 6 | [src/sample.rs](src/sample.rs) | Reverse sampling loop (pure noise → image) and grid-PNG export |
 | — | [src/main.rs](src/main.rs) | CLI entry point wiring it all together |
@@ -66,7 +66,25 @@ cargo run --release -- <steps>       # e.g. cargo run --release -- 5000
 cargo run --release -- sample <n>        # e.g. cargo run --release -- sample 16
 cargo run --release -- sample <n> raw    # raw training weights, for comparison
 # writes samples/grid.png
+
+# Add --large to any command to use the larger model instead (see below).
+cargo run --release -- --large <steps>
+cargo run --release -- --large sample <n>
+# checkpoints/unet_large{,_ema}.safetensors, samples/grid_large.png
 ```
+
+### Model sizes
+
+| | `small` (default) | `--large` |
+|---|---|---|
+| Base channels | 32 | 64 |
+| ResBlocks per level | 1 | 2 |
+| Self-attention at 16×16 | no | yes |
+| Parameters | 1.1M | 5.5M |
+| M4 GPU (Metal) | ~1.1 steps/s | ~0.36 steps/s |
+| M4 CPU | ~0.33 steps/s | ~0.09 steps/s |
+
+Each size has its own checkpoint files, since their weights aren't interchangeable; the small model's variable names are unchanged, so checkpoints from before the large option existed still load. The large model has to be trained from scratch.
 
 Training also keeps an exponential moving average (EMA, decay 0.999) of the weights in [src/ema.rs](src/ema.rs), saved alongside the main checkpoint as `checkpoints/unet_ema.safetensors`. Sampling from the EMA rather than the raw weights removes much of the speckle/blotch noise caused by step-to-step weight jitter. When resuming a checkpoint that predates EMA, the average is initialized from the current weights; give it a few thousand steps before judging samples.
 
@@ -86,7 +104,7 @@ Loss plateaus very early (within a few hundred steps) to a floor around 0.02-0.0
 - **~7,500 steps**: real (if blurry) facial structure starts appearing — hair, eye regions, rough face outlines.
 - **~23,000 steps**: consistently recognizable, if soft/impressionistic, faces.
 
-Further training keeps helping but with diminishing returns; the tiny architecture (32 base channels, 2 levels) caps how sharp it can ever get regardless of training time. The natural next lever is model capacity, not more steps — e.g. doubling to 64 base channels (~4x compute).
+Further training keeps helping but with diminishing returns; the tiny architecture (32 base channels, 2 levels) caps how sharp it can ever get regardless of training time. The natural next lever is model capacity, not more steps — which is what the `--large` configuration is for (64 base channels, two ResBlocks per level, self-attention at the 16×16 bottleneck; ~3.5x compute per step).
 
 ## Known issues (fixed locally)
 
