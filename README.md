@@ -121,7 +121,7 @@ A full 100,000-step large-model run on that machine (`RAYON_NUM_THREADS=4 ... --
 
 ## Results
 
-Loss plateaus very early (within a few hundred steps) to a floor around 0.02-0.05 and barely moves after that — this is an inherent property of the MSE noise-prediction objective, not a sign that training has stalled. **Loss is a poor signal for visual progress here; you have to actually sample and look.** Empirically, with this exact setup:
+Loss plateaus very early (within a few hundred steps) to a floor around 0.02-0.05 (single-batch values of roughly 0.005-0.05 late in the 100,000-step large-model run) and barely moves after that — this is an inherent property of the MSE noise-prediction objective, not a sign that training has stalled. **Loss is a poor signal for visual progress here; you have to actually sample and look.** Empirically, with the default small model:
 
 - **~1,500 steps**: pure color/skin-tone blobs, no structure at all.
 - **~7,500 steps**: real (if blurry) facial structure starts appearing — hair, eye regions, rough face outlines.
@@ -145,7 +145,7 @@ More steps still help, but with clearly diminishing returns by the end of this r
 
 ## Known issues (fixed locally)
 
-Real bugs in candle surfaced while building and porting this, none yet fixed upstream at the commit this project pins to:
+Real bugs in candle surfaced while building and porting this. Apart from the first, none are fixed upstream at the commit this project pins to:
 
 1. **Build failure on Apple Silicon stable Rust**: an unstable NEON fp16 intrinsic in candle-core's CPU backend. Fixed upstream since (`vendor/candle` is pinned to a commit that already includes that fix).
 2. **Silently wrong gradients**: candle-core's Metal conv2d backward pass fed a non-contiguous tensor into im2col/gemm when computing the weight gradient, producing an incorrect gradient with no error — training would have silently diverged. Patched locally in `vendor/candle/candle-core/src/backprop.rs` (`.contiguous()` before the weight-gradient conv calls). See [huggingface/candle#3839](https://github.com/huggingface/candle/pull/3839) (unmerged at time of writing).
