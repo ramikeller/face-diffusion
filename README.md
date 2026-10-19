@@ -2,11 +2,11 @@
 
 A from-scratch DDPM (denoising diffusion probabilistic model) in Rust, trained on celebrity faces. No pretrained weights, no diffusion library — the network learns to reverse a fixed noising process, then sampling starts from pure random noise and iteratively denoises it into a novel 64×64 face.
 
-Deliberately small (64×64 images, a 2-level U-Net, ~1.1M parameters) so it trains fast enough on a single GPU to actually iterate on, rather than aiming for production-quality output. Example output, sampled from the EMA weights after 23,300+ training steps plus a further run with EMA enabled:
+Deliberately small (64×64 images, a 2-level U-Net, ~1.1M parameters, or 5.5M with `--large`) so it trains fast enough on a single GPU to actually iterate on, rather than aiming for production-quality output. Example output from the `--large` model, sampled from the EMA weights after 100,000 training steps on a CPU-only mini PC plus a 50-step top-up on an M4's Metal GPU:
 
 ![Example output grid](docs/example_output.png)
 
-Several samples are clearly recognizable faces with realistic skin tones, but many are still warped or double-exposed — that's the tiny model's capacity ceiling, not a bug. See [Results](#results) below.
+Most samples are clearly recognizable faces with plausible lighting, skin tones and expressions; hair, backgrounds and some facial features are still smeared or distorted. See [Results](#results) below.
 
 ## Pipeline
 
@@ -99,7 +99,7 @@ Each size has its own checkpoint files, since their weights aren't interchangeab
 
 Training also keeps an exponential moving average (EMA, decay 0.999) of the weights in [src/ema.rs](src/ema.rs), saved alongside the main checkpoint as `checkpoints/unet_ema.safetensors` (`unet_large_ema.safetensors` for `--large`). Sampling from the EMA rather than the raw weights removes much of the speckle/blotch noise caused by step-to-step weight jitter. When resuming a checkpoint that predates EMA, the average is initialized from the current weights; give it a few thousand steps before judging samples.
 
-Same checkpoint and same starting noise (candle's Metal RNG uses a fixed default seed), raw weights on the left, EMA weights on the right — the EMA removes most of the grainy high-frequency texture:
+Same `--large` checkpoint and same starting noise (candle's Metal RNG uses a fixed default seed), raw weights on the left, EMA weights on the right. The raw weights here had just had 50 steps with a freshly restarted optimizer, and the EMA gives smoother skin and more natural color; on the small model, earlier in training, the gap was larger, with the EMA removing most of the grainy high-frequency texture:
 
 | Raw weights | EMA weights |
 |---|---|
@@ -117,6 +117,8 @@ On an AMD mini PC (GEM12, CPU-only, 6 threads, in an LXC container with 16 GB RA
 
 Smaller batches were faster *per image* here, and 4 threads were within 3% of 6 (8.7 s/step at batch 16) - both consistent with this workload being memory-bandwidth bound on CPU. Batch 64 was OOM-killed with 8 GB of RAM. Even at its best, that machine is ~12x slower than the M4's Metal GPU (~23 images/s for the large model).
 
+A full 100,000-step large-model run on that machine (`RAYON_NUM_THREADS=4 ... --large --batch 16 100000`) took 829,927 s (9.6 days, 8.3 s/step), and those weights produced the example output at the top of this README.
+
 ## Results
 
 Loss plateaus very early (within a few hundred steps) to a floor around 0.02-0.05 and barely moves after that — this is an inherent property of the MSE noise-prediction objective, not a sign that training has stalled. **Loss is a poor signal for visual progress here; you have to actually sample and look.** Empirically, with this exact setup:
@@ -126,6 +128,8 @@ Loss plateaus very early (within a few hundred steps) to a floor around 0.02-0.0
 - **~23,000 steps**: consistently recognizable, if soft/impressionistic, faces.
 
 Further training keeps helping but with diminishing returns; the tiny architecture (32 base channels, 2 levels) caps how sharp it can ever get regardless of training time. The natural next lever is model capacity, not more steps — which is what the `--large` configuration is for (64 base channels, two ResBlocks per level, self-attention at the 16×16 bottleneck; ~3.5x compute per step).
+
+That bet paid off: after 100,000 steps at batch 16 (1.6M images seen, about 80 passes over the dataset), the large model produces mostly coherent faces with distinct eyes, mouths, expressions and lighting (the grid at the top of this README), a clear step up from the small model's soft, often double-exposed faces.
 
 ## Known issues (fixed locally)
 
