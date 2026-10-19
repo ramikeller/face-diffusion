@@ -131,6 +131,18 @@ Further training keeps helping but with diminishing returns; the tiny architectu
 
 That bet paid off: after 100,000 steps at batch 16 (1.6M images seen, about 80 passes over the dataset), the large model produces mostly coherent faces with distinct eyes, mouths, expressions and lighting (the grid at the top of this README), a clear step up from the small model's soft, often double-exposed faces.
 
+Progress over that run, sampled from the EMA weights roughly every 1,300 steps (each row is 12 samples from three consecutive sample runs, each with fresh random noise; the last two rows are both the final 100,000-step checkpoint):
+
+![Large-model samples across 100,000 training steps](docs/training_progress.png)
+
+- **Up to ~7k steps**: static, color blobs and many blank (all-white) outputs.
+- **~10k-22k**: the first face-like shapes, but about half the outputs are still flat black, red or blue.
+- **~30k-48k**: mostly faces, warped, with occasional blank outputs.
+- **~60k-78k**: blank outputs become rare, and most samples are recognizable faces.
+- **~90k-100k**: nearly every sample is a coherent face. Gains here come mainly from fewer distorted samples rather than sharper ones, and 90k vs. 100k is hard to tell apart.
+
+More steps still help, but with clearly diminishing returns by the end of this run.
+
 ## Known issues (fixed locally)
 
 Real bugs in candle surfaced while building and porting this, none yet fixed upstream at the commit this project pins to:
